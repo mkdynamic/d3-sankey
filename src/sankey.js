@@ -62,6 +62,7 @@ export default function Sankey() {
   let nodes = defaultNodes;
   let links = defaultLinks;
   let iterations = 6;
+  let symmetric = true;
 
   function sankey() {
     const graph = {nodes: nodes.apply(null, arguments), links: links.apply(null, arguments)};
@@ -70,7 +71,9 @@ export default function Sankey() {
     computeNodeDepths(graph);
     computeNodeHeights(graph);
     computeNodeBreadths(graph);
+    if (symmetric) rescaleGraphMetrics(graph);
     computeLinkBreadths(graph);
+    scaleLinkBreadths(graph);
     return graph;
   }
 
@@ -121,6 +124,10 @@ export default function Sankey() {
 
   sankey.iterations = function(_) {
     return arguments.length ? (iterations = +_, sankey) : iterations;
+  };
+
+  sankey.symmetric = function(_) {
+    return arguments.length ? (symmetric = +_, sankey) : symmetric;
   };
 
   function computeNodeLinks({nodes, links}) {
@@ -208,7 +215,7 @@ export default function Sankey() {
     return columns;
   }
 
-  function initializeNodeBreadths(columns) {
+  function initializeNodeBreadths(columns, graph) {
     const ky = min(columns, c => (y1 - y0 - (c.length - 1) * py) / sum(c, value));
     for (const nodes of columns) {
       let y = y0;
@@ -233,7 +240,7 @@ export default function Sankey() {
   function computeNodeBreadths(graph) {
     const columns = computeNodeLayers(graph);
     py = Math.min(dy, (y1 - y0) / (max(columns, c => c.length) - 1));
-    initializeNodeBreadths(columns);
+    initializeNodeBreadths(columns, graph);
     for (let i = 0; i < iterations; ++i) {
       const alpha = Math.pow(0.99, i);
       const beta = Math.max(1 - alpha, (i + 1) / iterations);
@@ -293,8 +300,10 @@ export default function Sankey() {
     const subject = nodes[i];
     resolveCollisionsBottomToTop(nodes, subject.y0 - py, i - 1, alpha);
     resolveCollisionsTopToBottom(nodes, subject.y1 + py, i + 1, alpha);
-    resolveCollisionsBottomToTop(nodes, y1, nodes.length - 1, alpha);
-    resolveCollisionsTopToBottom(nodes, y0, 0, alpha);
+    if (!symmetric) {
+      resolveCollisionsBottomToTop(nodes, y1, nodes.length - 1, alpha);
+      resolveCollisionsTopToBottom(nodes, y0, 0, alpha);
+    }
   }
 
   // Push any overlapping nodes down.
@@ -363,6 +372,42 @@ export default function Sankey() {
       y -= width;
     }
     return y;
+  }
+
+  // Rescale the all metrics to fit within the extents.
+  function rescaleGraphMetrics(graph) {
+    const [x2, y2] = [min(graph.nodes, (d) => d.x0), min(graph.nodes, (d) => d.y0)];
+    const [x3, y3] = [max(graph.nodes, (d) => d.x1), max(graph.nodes, (d) => d.y1)];
+    const [w0, h0] = [x1 - x0, y1 - y0];
+    const [w1, h1] = [x3 - x2, y3 - y2];
+    const [sx, sy] = [w0 / w1, h0 / h1];
+    for (const node of graph.nodes) {
+      node.x0 = (node.x0 - x2) * sx;
+      node.x1 = (node.x1 - x2) * sx;
+      node.y0 = (node.y0 - y2) * sy;
+      node.y1 = (node.y1 - y2) * sy;
+    }
+    for (const link of graph.links) {
+      link.width = link.width * sy;
+    }
+  }
+
+  // Scales all links so that they fit to the node breadths, regardless of value.
+  function scaleLinkBreadths(graph) {
+    const transform = (node, links, i) => {
+      if (links.length > 0) {
+        const f1 = (node.y1 - node.y0) / sum(links, (l) => l.width);
+        for (const link of links) {
+          link[`w${i}`] = link.width * f1;
+          const yd = link[`y${i}`] - node.y0;
+          link[`y${i}`] = node.y0 + yd * f1;
+        }
+      }
+    }
+    for (const node of graph.nodes) {
+      transform(node, node.sourceLinks, 0);
+      transform(node, node.targetLinks, 1);
+    }
   }
 
   return sankey;
